@@ -1,0 +1,20 @@
+[Unit]
+Description=carMonitor — SIM7000C GPS web dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mars
+WorkingDirectory=/home/mars/carMonitor/backend
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/mars/carMonitor/.venv/bin/uvicorn app:app \
+    --host 0.0.0.0 --port 8000 --ws websockets --log-level info
+Restart=always
+RestartSec=3
+# SIM7000C CDC ACM devices occasionally reset; keep the service alive.
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

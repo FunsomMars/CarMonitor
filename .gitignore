@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# Tile cache (regenerated at runtime from 高德)
+frontend/tiles/
+
+# Local data (only the Pi keeps the live DB)
+data/
+*.db
+*.sqlite
+*.sqlite3
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
+
+# Logs
+*.log

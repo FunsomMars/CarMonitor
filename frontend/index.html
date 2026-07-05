@@ -1,0 +1,1749 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>carMonitor · SIM7000C</title>
+<link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css" />
+<style>
+  :root {
+    --bg:        #0b1115;
+    --panel:     rgba(15, 22, 28, 0.86);
+    --panel-bd:  rgba(255, 255, 255, 0.08);
+    --text:      #e6edf3;
+    --muted:     #8b97a4;
+    --accent:    #4fc3f7;
+    --good:      #66bb6a;
+    --warn:      #ffb74d;
+    --bad:       #ef5350;
+    --mono:      'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+  }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+               font: 14px/1.45 -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; }
+  body { overscroll-behavior: none; }
+  #map { position: absolute; inset: 0; z-index: 0; }
+  .leaflet-container { background: #0a1014; }
+
+  /* Connection pill (top-left) */
+  .pill {
+    position: absolute; top: 14px; left: 14px; z-index: 1000;
+    background: var(--panel); backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid var(--panel-bd); border-radius: 12px;
+    padding: 10px 14px; display: flex; align-items: center; gap: 10px;
+    font-size: 12px; letter-spacing: 0.04em;
+    box-shadow: 0 8px 30px rgba(0,0,0,0.35);
+  }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--bad);
+         box-shadow: 0 0 0 0 rgba(239,83,80,0.6); animation: pulse 1.6s infinite; }
+  .dot.ok { background: var(--good); box-shadow: 0 0 0 0 rgba(102,187,106,0.6); }
+  .dot.warn { background: var(--warn); box-shadow: 0 0 0 0 rgba(255,183,77,0.6); }
+  .dot.play { background: var(--accent); }
+  @keyframes pulse {
+    0%   { box-shadow: 0 0 0 0 currentColor; }
+    70%  { box-shadow: 0 0 0 8px transparent; }
+    100% { box-shadow: 0 0 0 0 transparent; }
+  }
+
+  /* Stats panel (top-right) */
+  .stats {
+    position: absolute; top: 14px; right: 14px; z-index: 1000;
+    background: var(--panel); backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid var(--panel-bd); border-radius: 14px;
+    padding: 14px 16px; min-width: 260px; max-width: 320px;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.4);
+  }
+  .stats h1 {
+    margin: 0 0 8px 0; font-size: 11px; font-weight: 600; letter-spacing: 0.18em;
+    text-transform: uppercase; color: var(--muted);
+  }
+  .stats .ll {
+    font: 600 18px/1.2 var(--mono); color: var(--accent);
+    margin-bottom: 12px; word-break: break-all;
+  }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 18px; }
+  .stat { display: flex; flex-direction: column; gap: 2px; }
+  .stat .k { font-size: 10px; color: var(--muted); letter-spacing: 0.1em;
+             text-transform: uppercase; }
+  .stat .v { font: 600 15px/1.1 var(--mono); color: var(--text); }
+  .stat .v.dim { color: var(--muted); }
+
+  /* Bottom control bar (live mode) */
+  .controls {
+    position: absolute; bottom: 14px; left: 14px; z-index: 1000;
+    background: var(--panel); backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid var(--panel-bd); border-radius: 12px;
+    padding: 8px; display: flex; gap: 6px;
+    box-shadow: 0 8px 30px rgba(0,0,0,0.35);
+  }
+  .controls button, .controls select {
+    background: transparent; border: 1px solid var(--panel-bd);
+    color: var(--text); padding: 6px 10px; border-radius: 8px;
+    font: 12px/1 inherit; cursor: pointer;
+    transition: background 120ms, border-color 120ms;
+  }
+  .controls button:hover, .controls select:hover { background: rgba(255,255,255,0.05); }
+  .controls button.active { background: var(--accent); color: #002230;
+                           border-color: var(--accent); }
+  .controls button { display: inline-flex; align-items: center; gap: 4px; }
+  .controls button svg { width: 12px; height: 12px; flex-shrink: 0; }
+  .controls button.flash { animation: locateFlash 0.6s ease-out; }
+  @keyframes locateFlash {
+    0%   { background: var(--bad); border-color: var(--bad); color: #fff; }
+    100% { background: transparent; border-color: var(--panel-bd); color: var(--text); }
+  }
+  .controls select { padding-right: 22px; appearance: none; }
+
+  /* Playback panel (bottom, replaces controls when active) */
+  .player {
+    position: absolute; bottom: 14px; left: 14px; right: 14px; z-index: 1000;
+    background: var(--panel); backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid var(--panel-bd); border-radius: 14px;
+    padding: 14px 18px;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.4);
+    display: grid; grid-template-columns: auto 1fr auto; gap: 14px;
+    align-items: center;
+  }
+  .player .pl-left, .player .pl-right {
+    display: flex; gap: 8px; align-items: center;
+  }
+  .player button {
+    background: rgba(255,255,255,0.05); border: 1px solid var(--panel-bd);
+    color: var(--text); padding: 8px 12px; border-radius: 10px;
+    font: 13px/1 inherit; cursor: pointer;
+    transition: background 120ms, transform 80ms;
+  }
+  .player button:hover { background: rgba(255,255,255,0.12); }
+  .player button:active { transform: scale(0.96); }
+  .player button.primary {
+    background: var(--accent); color: #002230; border-color: var(--accent);
+    font-weight: 600;
+  }
+  .player .scrub {
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .player .scrub-row {
+    display: flex; justify-content: space-between;
+    font: 11px/1 var(--mono); color: var(--muted); letter-spacing: 0.06em;
+  }
+  .player .scrub-row b { color: var(--accent); font-weight: 600; }
+  .player input[type=range] {
+    -webkit-appearance: none; appearance: none; width: 100%;
+    height: 6px; background: rgba(255,255,255,0.1); border-radius: 999px;
+    outline: none;
+  }
+  .player input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none;
+    width: 16px; height: 16px; border-radius: 50%;
+    background: var(--accent); cursor: pointer;
+    border: 2px solid #002230;
+    box-shadow: 0 0 0 4px rgba(79,195,247,0.2);
+  }
+  .player input[type=range]::-moz-range-thumb {
+    width: 14px; height: 14px; border-radius: 50%;
+    background: var(--accent); cursor: pointer; border: 2px solid #002230;
+  }
+  .player input[type=datetime-local] {
+    background: rgba(255,255,255,0.05); border: 1px solid var(--panel-bd);
+    color: var(--text); padding: 6px 8px; border-radius: 8px;
+    font: 12px/1 var(--mono); cursor: pointer; min-width: 175px;
+    color-scheme: dark;
+  }
+  .player input[type=datetime-local]::-webkit-calendar-picker-indicator {
+    filter: invert(1) opacity(0.7);
+    cursor: pointer;
+  }
+  .player .dash { color: var(--muted); padding: 0 2px; }
+  .player select {
+    background: rgba(255,255,255,0.05); border: 1px solid var(--panel-bd);
+    color: var(--text); padding: 6px 10px; border-radius: 8px;
+    font: 12px/1 inherit; cursor: pointer; appearance: none;
+    padding-right: 22px;
+  }
+
+  /* Mode toggle buttons (segmented) */
+  .mode-toggle {
+    display: inline-flex; border: 1px solid var(--panel-bd);
+    border-radius: 10px; overflow: hidden;
+  }
+  .mode-toggle button {
+    background: transparent; border: 0; padding: 6px 12px;
+    color: var(--muted); cursor: pointer; font: 12px/1 inherit;
+    transition: background 120ms, color 120ms;
+  }
+  .mode-toggle button.active { background: var(--accent); color: #002230; }
+
+  /* ----- Layout: sidebar (nav) + main (page switcher) ----- */
+  :root {
+    --sidebar-w: 56px;
+    --sidebar-w-expanded: 220px;
+  }
+  html, body { margin: 0; height: 100%; }
+  body {
+    display: grid;
+    grid-template-columns: var(--sidebar-w) 1fr;
+    background: var(--bg);
+    overflow: hidden;
+  }
+  body.expanded { grid-template-columns: var(--sidebar-w-expanded) 1fr; }
+
+  /* Sidebar is a real column now, not an overlay. */
+  #sidebar {
+    background: var(--panel);
+    border-right: 1px solid var(--panel-bd);
+    display: flex; flex-direction: column;
+    overflow: hidden;
+    transition: background 250ms;
+  }
+  .sb-head {
+    flex: 0 0 auto;
+    display: flex; align-items: center;
+    height: 56px;
+    border-bottom: 1px solid var(--panel-bd);
+    overflow: hidden;
+  }
+  .sb-brand {
+    flex: 1 1 auto;
+    background: transparent; border: 0;
+    color: var(--accent);
+    font: 600 14px/1 -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    letter-spacing: 0.06em;
+    text-align: left;
+    padding-left: 18px;
+    cursor: pointer;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    height: 100%;
+    transition: color 120ms;
+  }
+  .sb-brand:hover { color: var(--text); }
+  body:not(.expanded) .sb-brand { display: none; }
+
+  .sb-toggle {
+    flex: 0 0 56px;
+    background: transparent; border: 0;
+    color: var(--text); cursor: pointer;
+    height: 100%;
+    display: flex; align-items: center; justify-content: center;
+    transition: background 120ms;
+  }
+  .sb-toggle:hover { background: rgba(255,255,255,0.06); }
+  .sb-toggle svg { width: 20px; height: 20px; }
+
+  .nav-btn {
+    flex: 0 0 auto;
+    background: transparent; border: 0;
+    color: var(--muted); cursor: pointer;
+    display: flex; align-items: center;
+    justify-content: center;
+    padding: 16px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    transition: background 120ms, color 120ms;
+    width: 100%;
+  }
+  .nav-btn:hover { background: rgba(255,255,255,0.05); color: var(--text); }
+  .nav-btn.active { color: var(--accent); }
+  .nav-btn.active::before {
+    content: ''; position: absolute; left: 0; top: 50%;
+    transform: translateY(-50%);
+    width: 3px; height: 24px;
+    background: var(--accent);
+    border-radius: 0 3px 3px 0;
+  }
+  .nav-btn { position: relative; }
+  .nav-btn svg { width: 18px; height: 18px; flex-shrink: 0; }
+  .nav-btn .label {
+    display: none;
+    margin-left: 12px;
+    font-size: 13px; font-weight: 500;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+  }
+  body.expanded .nav-btn { justify-content: flex-start; padding-left: 18px; }
+  body.expanded .nav-btn .label { display: inline; }
+
+  /* Main + page switcher */
+  #main {
+    position: relative;
+    overflow: hidden;
+    min-width: 0;
+  }
+  .page {
+    display: none;
+    position: absolute; inset: 0;
+  }
+  .page.active { display: block; }
+
+  /* Map page: map fills main, overlay panels as before. */
+  .page-map #map { position: absolute; inset: 0; z-index: 0; }
+  .page-map .pill     { z-index: 1000; }
+  .page-map .stats    { z-index: 1000; }
+  .page-map .controls { z-index: 1000; }
+  .page-map .player   { z-index: 1000; }
+
+  /* Dashboard page: full-width widget grid. */
+  .page-dashboard {
+    overflow-y: auto;
+    padding: 24px 28px 32px;
+  }
+  .page-dashboard .dash-header {
+    display: flex; align-items: baseline; justify-content: space-between;
+    margin: 0 0 18px 0;
+  }
+  .page-dashboard .dash-header h1 {
+    margin: 0; font-size: 18px; font-weight: 600;
+    letter-spacing: 0.06em; color: var(--accent);
+  }
+  .page-dashboard .dash-header .sub {
+    margin-left: 10px; color: var(--muted); font-size: 12px;
+  }
+  .page-dashboard .dash-header button {
+    background: rgba(255,255,255,0.06); border: 1px solid var(--panel-bd);
+    color: var(--text); padding: 6px 14px; border-radius: 8px;
+    font: 12px/1 inherit; cursor: pointer;
+    transition: background 120ms;
+  }
+  .page-dashboard .dash-header button:hover { background: rgba(255,255,255,0.12); }
+
+  .dash-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 14px;
+  }
+  .dash-grid .widget.kpi-card { grid-column: span 1; }
+  .dash-grid .widget.col-2    { grid-column: span 2; }
+  .dash-grid .widget.col-3    { grid-column: span 3; }
+  .dash-grid .widget.col-4    { grid-column: span 4; }
+
+  .widget {
+    background: rgba(255,255,255,0.03);
+    border: 1px solid var(--panel-bd);
+    border-radius: 12px;
+    padding: 14px 16px 12px;
+  }
+  .widget h2 {
+    margin: 0 0 10px 0; font-size: 11px; font-weight: 600;
+    color: var(--muted); letter-spacing: 0.12em;
+    text-transform: uppercase;
+    display: flex; justify-content: space-between; align-items: baseline;
+  }
+  .widget h2 .sub {
+    font-size: 10px; font-weight: 400; letter-spacing: 0.06em;
+    color: var(--muted); text-transform: none;
+  }
+
+  /* KPI cards: 4 across. */
+  .kpis {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px;
+  }
+  .kpi {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid var(--panel-bd);
+    border-radius: 10px; padding: 14px 16px;
+  }
+  .kpi .k { font-size: 10px; color: var(--muted); letter-spacing: 0.1em;
+            text-transform: uppercase; }
+  .kpi .v { font: 700 24px/1.1 var(--mono); color: var(--text); margin-top: 6px; }
+  .kpi .u { font: 12px/1 var(--mono); color: var(--muted); margin-left: 4px; }
+
+  /* Heatmap: 7 rows × 24 cols, scales to widget width. */
+  .heatmap {
+    display: grid;
+    grid-template-columns: 32px repeat(24, 1fr);
+    gap: 2px;
+    font: 10px/1 var(--mono);
+  }
+  .heatmap .haxis {
+    color: var(--muted); text-align: center; padding-bottom: 2px;
+  }
+  .heatmap .haxis.h0  { color: var(--text); }
+  .heatmap .haxis.h6  { color: var(--text); }
+  .heatmap .haxis.h12 { color: var(--text); }
+  .heatmap .haxis.h18 { color: var(--text); }
+  .heatmap .vaxis {
+    color: var(--muted); text-align: right; padding-right: 4px;
+    display: flex; align-items: center; justify-content: flex-end;
+  }
+  .heatmap .cell {
+    aspect-ratio: 1 / 1;
+    background: rgba(255,255,255,0.04);
+    border-radius: 2px;
+  }
+
+  .chart-box      { position: relative; height: 220px; }
+  .chart-box.tall { height: 260px; }
+
+  table.trips {
+    width: 100%; border-collapse: collapse;
+    font: 12px/1.4 var(--mono);
+  }
+  table.trips th, table.trips td {
+    padding: 7px 8px; text-align: right; border-bottom: 1px solid var(--panel-bd);
+  }
+  table.trips th { color: var(--muted); font-weight: 500; letter-spacing: 0.06em;
+                   text-transform: uppercase; font-size: 10px; text-align: right; }
+  table.trips th:first-child, table.trips td:first-child { text-align: left; }
+  table.trips td.lkm   { color: var(--accent); font-weight: 600; }
+  table.trips tr:last-child td { border-bottom: 0; }
+
+  .dash-empty {
+    color: var(--muted); text-align: center; padding: 60px 0;
+    font-size: 13px;
+  }
+
+  /* ----- Data management page ----- */
+  .page-data .data-summary { margin-bottom: 14px; }
+  .page-data .data-toolbar {
+    display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap;
+    align-items: center;
+  }
+  .page-data .data-toolbar button {
+    background: rgba(255,255,255,0.06); border: 1px solid var(--panel-bd);
+    color: var(--text); padding: 6px 12px; border-radius: 8px;
+    font: 12px/1 inherit; cursor: pointer;
+    transition: background 120ms, border-color 120ms, color 120ms;
+  }
+  .page-data .data-toolbar button:hover { background: rgba(255,255,255,0.12); }
+  .page-data .data-toolbar button.danger {
+    background: rgba(239,83,80,0.18); border-color: rgba(239,83,80,0.4);
+    color: var(--bad); margin-left: auto; font-weight: 600;
+  }
+  .page-data .data-toolbar button.danger:hover:not(:disabled) {
+    background: rgba(239,83,80,0.3);
+  }
+  .page-data .data-toolbar button.danger:disabled {
+    opacity: 0.4; cursor: not-allowed;
+    background: transparent; border-color: var(--panel-bd); color: var(--muted);
+  }
+  .page-data .data-range {
+    display: grid;
+    grid-template-columns: auto 1fr auto 1fr auto;
+    gap: 10px; align-items: center; margin-bottom: 6px;
+  }
+  .page-data .data-range label {
+    font-size: 11px; color: var(--muted); letter-spacing: 0.06em;
+  }
+  .page-data .data-range input[type=datetime-local] {
+    background: rgba(255,255,255,0.05); border: 1px solid var(--panel-bd);
+    color: var(--text); padding: 6px 8px; border-radius: 8px;
+    font: 12px/1 var(--mono); cursor: pointer;
+    color-scheme: dark; min-width: 175px;
+  }
+  .page-data .data-range input[type=datetime-local]::-webkit-calendar-picker-indicator {
+    filter: invert(1) opacity(0.7); cursor: pointer;
+  }
+  .page-data .data-range button.danger {
+    background: rgba(239,83,80,0.18); border: 1px solid rgba(239,83,80,0.4);
+    color: var(--bad); padding: 8px 16px; border-radius: 8px;
+    font: 12px/1 inherit; cursor: pointer; font-weight: 600;
+    transition: background 120ms;
+  }
+  .page-data .data-range button.danger:hover { background: rgba(239,83,80,0.3); }
+  .page-data .danger-zone button.big {
+    background: rgba(239,83,80,0.18); border: 1px solid rgba(239,83,80,0.4);
+    color: var(--bad); padding: 10px 18px; border-radius: 8px;
+    font: 13px/1 inherit; cursor: pointer; font-weight: 600;
+    transition: background 120ms;
+  }
+  .page-data .danger-zone button.big:hover { background: rgba(239,83,80,0.3); }
+  .page-data .data-hint {
+    margin: 10px 0 0; color: var(--muted); font-size: 11px;
+  }
+  table.data-days {
+    width: 100%; border-collapse: collapse; font: 12px/1.4 var(--mono);
+  }
+  table.data-days th, table.data-days td {
+    padding: 8px 10px; text-align: right;
+    border-bottom: 1px solid var(--panel-bd);
+  }
+  table.data-days th {
+    color: var(--muted); font-weight: 500; letter-spacing: 0.06em;
+    text-transform: uppercase; font-size: 10px;
+  }
+  table.data-days th:first-child, table.data-days td:first-child {
+    text-align: center; width: 30px;
+  }
+  table.data-days th:nth-child(2), table.data-days td:nth-child(2) {
+    text-align: left;
+  }
+  table.data-days td.lkm { color: var(--accent); font-weight: 600; }
+  table.data-days tr:last-child td { border-bottom: 0; }
+  table.data-days tbody tr { transition: background 80ms; }
+  table.data-days tbody tr:hover { background: rgba(255,255,255,0.04); }
+  table.data-days tbody tr.selected { background: rgba(239,83,80,0.10); }
+  table.data-days input[type=checkbox] {
+    width: 16px; height: 16px; cursor: pointer; accent-color: var(--bad);
+  }
+
+  .leaflet-control-attribution {
+    background: rgba(11,17,21,0.7) !important; color: var(--muted) !important;
+  }
+  .leaflet-control-attribution a { color: var(--accent) !important; }
+
+  /* Marker */
+  .marker {
+    width: 22px; height: 22px; transform-origin: center;
+    transition: transform 250ms cubic-bezier(.2,.7,.3,1);
+  }
+  .marker::before {
+    content: ''; display: block; width: 16px; height: 16px;
+    border-radius: 50%; background: var(--accent);
+    box-shadow: 0 0 0 4px rgba(79,195,247,0.25), 0 0 14px rgba(79,195,247,0.7);
+    margin: 3px;
+  }
+  .marker::after {
+    content: ''; position: absolute; inset: 0;
+    background: linear-gradient(45deg, transparent 47%, var(--accent) 47%,
+                                         var(--accent) 53%, transparent 53%);
+    clip-path: polygon(50% 0, 60% 30%, 60% 100%, 40% 100%, 40% 30%);
+  }
+</style>
+</head>
+<body>
+  <aside id="sidebar">
+    <div class="sb-head">
+      <button class="sb-brand" id="sbBrand" type="button" title="返回仪表盘">CarMonitor</button>
+      <button class="sb-toggle" id="sbToggle" type="button" title="展开 / 收起" aria-label="切换侧边栏">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-width="2.4" stroke-linecap="round" aria-hidden="true">
+          <line x1="4"  y1="7"  x2="20" y2="7"/>
+          <line x1="4"  y1="12" x2="20" y2="12"/>
+          <line x1="4"  y1="17" x2="20" y2="17"/>
+        </svg>
+      </button>
+    </div>
+    <button class="nav-btn" data-page="dashboard" title="仪表盘" type="button">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="2.0" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <rect x="3"  y="13" width="4" height="8"  rx="1"/>
+        <rect x="10" y="6"  width="4" height="15" rx="1"/>
+        <rect x="17" y="10" width="4" height="11" rx="1"/>
+      </svg>
+      <span class="label">仪表盘</span>
+    </button>
+    <button class="nav-btn active" data-page="map" title="实时定位" type="button">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="2.0" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M12 22s-7-7.5-7-13a7 7 0 1 1 14 0c0 5.5-7 13-7 13z"/>
+        <circle cx="12" cy="9" r="2.5"/>
+      </svg>
+      <span class="label">实时定位</span>
+    </button>
+    <button class="nav-btn" data-page="data" title="数据管理" type="button">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="2.0" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <polyline points="3 6 5 6 21 6"/>
+        <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+        <path d="M10 11v6"/>
+        <path d="M14 11v6"/>
+        <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+      </svg>
+      <span class="label">数据管理</span>
+    </button>
+  </aside>
+
+  <main id="main">
+    <section class="page page-map active" id="pageMap">
+      <div id="map"></div>
+
+      <div class="pill">
+        <span class="dot" id="connDot"></span>
+        <span id="connText">连接中…</span>
+      </div>
+
+      <div class="stats">
+        <h1 id="modeTitle">车辆位置 · 实时</h1>
+        <div class="ll" id="ll">— —</div>
+        <div class="grid">
+          <div class="stat"><div class="k">速度 km/h</div><div class="v" id="sog">—</div></div>
+          <div class="stat"><div class="k" title="对地航向 COG：车辆实际行驶方向（GPS 计算）。静止时显示最后一次方向，可能已不准。">航向 · 方位</div><div class="v" id="cog">—</div></div>
+          <div class="stat"><div class="k">海拔 m</div>     <div class="v" id="alt">—</div></div>
+          <div class="stat"><div class="k" title="已用于定位的卫星 / 可见卫星总数">卫星 已用/可见</div><div class="v" id="sat">—</div></div>
+          <div class="stat"><div class="k" title="水平精度因子，越小越好（1=理想）">HDOP 水平精度</div><div class="v" id="hdop">—</div></div>
+          <div class="stat"><div class="k" title="最强卫星的载波噪声比，越大信号越好（&gt;40 很好）">C/N0 最佳信噪比</div><div class="v" id="cn0">—</div></div>
+          <div class="stat"><div class="k" title="北京时间，UTC + 8 小时">时间 北京 UTC+8</div><div class="v" id="utc">—</div></div>
+          <div class="stat"><div class="k">定位精度 m</div><div class="v" id="hpa">—</div></div>
+        </div>
+      </div>
+
+      <!-- Live-mode controls -->
+      <div class="controls" id="liveControls">
+        <div class="mode-toggle">
+          <button id="modeLive" class="active">实时</button>
+          <button id="modePlay">回看</button>
+        </div>
+        <button id="followBtn" class="active">跟随</button>
+        <button id="locateBtn" title="快速定位到当前位置">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="7"/>
+            <circle cx="12" cy="12" r="2" fill="currentColor" stroke="none"/>
+            <line x1="12" y1="2"  x2="12" y2="5"/>
+            <line x1="12" y1="19" x2="12" y2="22"/>
+            <line x1="2"  y1="12" x2="5"  y2="12"/>
+            <line x1="19" y1="12" x2="22" y2="12"/>
+          </svg>
+          <span>定位</span>
+        </button>
+        <button id="trailBtn" class="active">轨迹</button>
+      </div>
+
+      <!-- Playback panel (hidden by default) -->
+      <div class="player" id="playerPanel" style="display:none">
+        <div class="pl-left">
+          <div class="mode-toggle">
+            <button id="modeLive2">实时</button>
+            <button id="modePlay2" class="active">回看</button>
+          </div>
+          <input type="datetime-local" id="startTime" step="1" title="起始时间 (UTC+8)" />
+          <span class="dash">—</span>
+          <input type="datetime-local" id="endTime" step="1" title="截止时间 (UTC+8)" />
+          <button id="loadRangeBtn" class="primary">载入</button>
+        </div>
+        <div class="scrub">
+          <div class="scrub-row">
+            <span><b id="tNow">—</b></span>
+            <span id="tDur">—</span>
+          </div>
+          <input type="range" id="seek" min="0" max="0" step="1" value="0" />
+        </div>
+        <div class="pl-right">
+          <select id="speedSel" title="速度">
+            <option value="1">1×</option>
+            <option value="5">5×</option>
+            <option value="20" selected>20×</option>
+            <option value="60">60×</option>
+            <option value="300">300×</option>
+          </select>
+          <button id="playBtn" class="primary">▶</button>
+          <button id="closeBtn">返回实时</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="page page-dashboard" id="pageDashboard">
+      <header class="dash-header">
+        <h1>仪表盘 · 近 30 天 <span class="sub" id="kpiRange"></span></h1>
+        <button id="dashRefresh" type="button">刷新</button>
+      </header>
+      <div class="dash-grid">
+        <div class="widget kpi-card col-4">
+          <div class="kpis">
+            <div class="kpi"><div class="k">总里程</div><div><span class="v" id="kTotal">—</span><span class="u">km</span></div></div>
+            <div class="kpi"><div class="k">最高速</div><div><span class="v" id="kMax">—</span><span class="u">km/h</span></div></div>
+            <div class="kpi"><div class="k">平均速度</div><div><span class="v" id="kAvg">—</span><span class="u">km/h</span></div></div>
+            <div class="kpi"><div class="k">行程数</div><div><span class="v" id="kTrips">—</span></div></div>
+          </div>
+        </div>
+
+        <div class="widget col-2">
+          <h2>每日里程 <span class="sub">km</span></h2>
+          <div class="chart-box"><canvas id="cDaily"></canvas></div>
+        </div>
+
+        <div class="widget col-2">
+          <h2>速度分布 <span class="sub">采样时长占比</span></h2>
+          <div class="chart-box"><canvas id="cHist"></canvas></div>
+        </div>
+
+        <div class="widget col-4">
+          <h2>时段活跃度 <span class="sub">星期 × 小时 · 北京</span></h2>
+          <div class="heatmap" id="cHeat"></div>
+        </div>
+
+        <div class="widget col-2">
+          <h2>Top 5 行程 <span class="sub">按距离</span></h2>
+          <table class="trips" id="cTrips"><tbody></tbody></table>
+        </div>
+
+        <div class="widget col-2">
+          <h2>信号质量 <span class="sub">近 7 天</span></h2>
+          <div class="chart-box tall"><canvas id="cSignal"></canvas></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="page page-data" id="pageData">
+      <header class="dash-header">
+        <h1>数据管理 <span class="sub" id="dataStats"></span></h1>
+        <button id="dataRefresh" type="button">刷新</button>
+      </header>
+
+      <div class="kpis data-summary">
+        <div class="kpi"><div class="k">总记录</div><div><span class="v" id="dTotalCount">—</span></div></div>
+        <div class="kpi"><div class="k">天数</div><div><span class="v" id="dDayCount">—</span></div></div>
+        <div class="kpi"><div class="k">最早记录</div><div><span class="v" id="dEarliest">—</span></div></div>
+        <div class="kpi"><div class="k">最晚记录</div><div><span class="v" id="dLatest">—</span></div></div>
+      </div>
+
+      <div class="widget col-4">
+        <h2>按日期选择 <span class="sub">勾选要删除的日期（多选）</span></h2>
+        <div class="data-toolbar">
+          <button id="dSelAll"   type="button">全选</button>
+          <button id="dSelNone"  type="button">全不选</button>
+          <button id="dSelInvert" type="button">反选</button>
+          <button id="dDelSel"   type="button" class="danger" disabled>删除选中 (0)</button>
+        </div>
+        <table class="data-days" id="dDaysTable">
+          <thead>
+            <tr>
+              <th></th>
+              <th>日期</th>
+              <th>记录</th>
+              <th>里程 km</th>
+              <th>最高速</th>
+              <th>时段 (UTC+8)</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div class="widget col-4">
+        <h2>按时间范围删除 <span class="sub">UTC+8 · 精确到秒</span></h2>
+        <div class="data-range">
+          <label>起始时间</label>
+          <input type="datetime-local" id="dRangeStart" step="1" title="起始时间 (UTC+8)">
+          <label>截止时间</label>
+          <input type="datetime-local" id="dRangeEnd" step="1" title="截止时间 (UTC+8)">
+          <button id="dDelRange" type="button" class="danger">删除该范围</button>
+        </div>
+        <p class="data-hint">起始与截止之间（含两端）的所有记录将被删除，不可恢复</p>
+      </div>
+
+      <div class="widget col-4 danger-zone">
+        <h2>危险操作 <span class="sub">不可恢复</span></h2>
+        <button id="dDelAll" type="button" class="danger big">清空所有数据</button>
+        <p class="data-hint">将删除数据库中所有 GPS 记录，操作不可撤销</p>
+      </div>
+    </section>
+  </main>
+
+  <script src="/static/vendor/leaflet/leaflet.js"></script>
+  <script src="/static/vendor/chart.umd.min.js"></script>
+  <script>
+  // ---------- Map setup ----------
+  const map = L.map('map', {
+    zoomControl: false,
+    attributionControl: true,
+    preferCanvas: true,
+  }).setView([31.2304, 121.4737], 14);
+
+  L.control.zoom({ position: 'bottomright' }).addTo(map);
+
+  L.tileLayer('/tiles/{z}/{x}/{y}.png', {
+    maxZoom: 18, minZoom: 3,
+    attribution: '© 高德地图', crossOrigin: false,
+  }).addTo(map);
+
+  const markerIcon = L.divIcon({
+    className: 'marker-wrap',
+    html: '<div class="marker" id="markerArrow"></div>',
+    iconSize: [22, 22], iconAnchor: [11, 11],
+  });
+
+  // ---------- Layer state ----------
+  let marker = null;
+  let trailLine = null;
+  let trailPoints = [];        // current rendered trail (live or playback)
+  let playbackLine = null;     // historical playback polyline (full day)
+  let playbackPlayed = null;   // sub-polyline showing progress
+  let mode = 'live';           // 'live' | 'play'
+
+  function ensureMarker(lat, lon) {
+    if (!marker) {
+      marker = L.marker([lat, lon], { icon: markerIcon, zIndexOffset: 1000 }).addTo(map);
+    } else {
+      marker.setLatLng([lat, lon]);
+    }
+  }
+  function ensureTrail() {
+    if (!trailLine) {
+      trailLine = L.polyline([], {
+        color: '#4fc3f7', weight: 4, opacity: 0.85,
+        lineCap: 'round', lineJoin: 'round',
+      }).addTo(map);
+    }
+  }
+  function ensurePlaybackLayers() {
+    if (!playbackLine) {
+      playbackLine = L.polyline([], {
+        color: 'rgba(139,151,164,0.45)', weight: 3, opacity: 0.7,
+        lineCap: 'round', lineJoin: 'round', interactive: false,
+      }).addTo(map);
+      playbackPlayed = L.polyline([], {
+        color: '#4fc3f7', weight: 5, opacity: 1,
+        lineCap: 'round', lineJoin: 'round', interactive: false,
+      }).addTo(map);
+    }
+  }
+
+  // ---------- State ----------
+  const state = {
+    follow: true,
+    showTrail: true,
+    lastFix: null,
+    play: { rows: [], idx: 0, timer: null, speed: 20, playing: false },
+  };
+
+  // ---------- UI helpers ----------
+  const $ = id => document.getElementById(id);
+
+  function setConn(s) {
+    const dot = $('connDot'), txt = $('connText');
+    dot.classList.remove('ok', 'warn', 'play');
+    if (mode === 'play') {
+      dot.classList.add('play');
+      txt.textContent = state.play.playing ? '回放中' : '回看';
+      return;
+    }
+    if (s === 'live') { dot.classList.add('ok'); txt.textContent = '实时'; }
+    else if (s === 'stale') { dot.classList.add('warn'); txt.textContent = '等待数据…'; }
+    else { txt.textContent = '连接中…'; }
+  }
+
+  function fmt(v, d = 2) { return v === null || v === undefined ? '—' : Number(v).toFixed(d); }
+  function fmtInt(v) { return v === null || v === undefined ? '—' : String(v); }
+
+  function fmtTime(iso) {
+    if (!iso) return '—';
+    const d = new Date(iso);
+    if (isNaN(d)) return '—';
+    // ISO timestamps from the server are UTC; shift to UTC+8 (Beijing).
+    const shifted = new Date(d.getTime() + 8 * 3600 * 1000);
+    const hh = String(shifted.getUTCHours()).padStart(2, '0');
+    const mm = String(shifted.getUTCMinutes()).padStart(2, '0');
+    const ss = String(shifted.getUTCSeconds()).padStart(2, '0');
+    return `${hh}:${mm}:${ss}`;
+  }
+
+  // 8-point compass labels for COG. 0° = North, 90° = East, etc.
+  // Boundaries are centred on each direction (22.5° wedges).
+  const COMPASS = [
+    { from: 337.5, to:  22.5, name: '北',     en: 'N'  },
+    { from:  22.5, to:  67.5, name: '东北',   en: 'NE' },
+    { from:  67.5, to: 112.5, name: '东',     en: 'E'  },
+    { from: 112.5, to: 157.5, name: '东南',   en: 'SE' },
+    { from: 157.5, to: 202.5, name: '南',     en: 'S'  },
+    { from: 202.5, to: 247.5, name: '西南',   en: 'SW' },
+    { from: 247.5, to: 292.5, name: '西',     en: 'W'  },
+    { from: 292.5, to: 337.5, name: '西北',   en: 'NW' },
+  ];
+  function cogLabel(deg) {
+    if (deg == null || isNaN(deg)) return null;
+    const d = ((deg % 360) + 360) % 360;
+    for (const c of COMPASS) {
+      if (c.from < c.to) { if (d >= c.from && d < c.to) return c; }
+      else               { if (d >= c.from || d < c.to) return c; }   // wraps 0°
+    }
+    return COMPASS[0];
+  }
+  function fmtCog(deg) {
+    if (deg == null) return '—';
+    const c = cogLabel(deg);
+    return c ? `${fmt(deg, 0)}° · ${c.name}` : `${fmt(deg, 0)}°`;
+  }
+
+  function applyFix(f) {
+    state.lastFix = f;
+    setConn('live');
+
+    if (f.fix !== 1 || f.lat == null || f.lon == null) {
+      $('ll').textContent = '未定位';
+      $('ll').style.color = 'var(--warn)';
+      return;
+    }
+    $('ll').style.color = 'var(--accent)';
+    $('ll').textContent = `${fmt(f.lat, 6)}, ${fmt(f.lon, 6)}`;
+    $('sog').textContent  = fmt(f.sog_kmh, 1);
+    $('cog').textContent  = fmtCog(f.cog_deg);
+    $('alt').textContent  = fmt(f.alt, 0);
+    $('sat').textContent  = `${fmtInt(f.sat_used)}/${fmtInt(f.sat_view)}`;
+    $('hdop').textContent = fmt(f.hdop, 1);
+    $('cn0').textContent  = fmtInt(f.cn0_max);
+    $('utc').textContent  = fmtTime(f.ts);
+    $('hpa').textContent  = fmt(f.hpa, 1);
+
+    ensureMarker(f.lat, f.lon);
+    if (f.cog_deg != null) {
+      const el = document.getElementById('markerArrow');
+      if (el) el.style.transform = `rotate(${f.cog_deg}deg)`;
+    }
+
+    if (state.showTrail && mode === 'live') {
+      ensureTrail();
+      const last = trailPoints[trailPoints.length - 1];
+      if (!last || last[0] !== f.lat || last[1] !== f.lon) {
+        trailPoints.push([f.lat, f.lon]);
+        trailLine.setLatLngs(trailPoints);
+      }
+    }
+
+    if (state.follow && mode === 'live') {
+      map.panTo([f.lat, f.lon], { animate: true, duration: 0.6 });
+    }
+  }
+
+  // ---------- WebSocket ----------
+  let ws = null;
+  let reconnectDelay = 1000;
+  function connect() {
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    ws = new WebSocket(`${proto}://${location.host}/ws`);
+    setConn('connecting');
+    ws.onopen = () => { reconnectDelay = 1000; setConn('stale'); };
+    ws.onmessage = (ev) => {
+      if (mode !== 'live') return;   // ignore live data while playing back
+      try { applyFix(JSON.parse(ev.data)); }
+      catch (e) { console.error('bad payload', e); }
+    };
+    ws.onclose = () => {
+      setConn('offline');
+      setTimeout(connect, reconnectDelay);
+      reconnectDelay = Math.min(reconnectDelay * 1.6, 15000);
+    };
+    ws.onerror = () => ws.close();
+  }
+
+  // ---------- Live history ----------
+  // Trail backfill at startup and whenever we re-enter live mode. We always
+  // pull the last 10 minutes — long enough to be useful, short enough that
+  // the polyline stays readable.
+  const TRAIL_BACKFILL_S = 600;
+  async function loadHistory() {
+    try {
+      const r = await fetch(`/api/history?since=${TRAIL_BACKFILL_S}`);
+      const data = await r.json();
+      trailPoints = data.rows.map(row => [row.lat, row.lon]).reverse();
+      if (state.showTrail && trailPoints.length) {
+        ensureTrail();
+        trailLine.setLatLngs(trailPoints);
+      }
+      if (state.follow && trailPoints.length) {
+        map.fitBounds(trailLine.getBounds(), { padding: [60, 60], maxZoom: 17 });
+      } else if (state.follow && state.lastFix) {
+        map.setView([state.lastFix.lat, state.lastFix.lon], 16);
+      }
+    } catch (e) {
+      console.error('history load failed', e);
+    }
+  }
+
+  // ---------- Mode switching ----------
+  async function enterLive() {
+    mode = 'live';
+    $('liveControls').style.display = 'flex';
+    $('playerPanel').style.display = 'none';
+    $('modeLive').classList.add('active'); $('modePlay').classList.remove('active');
+    $('modeLive2').classList.add('active'); $('modePlay2').classList.remove('active');
+    $('modeTitle').textContent = '车辆位置 · 实时';
+    setConn(state.lastFix ? 'live' : 'stale');
+    stopPlayback(true);
+    if (playbackLine) { map.removeLayer(playbackLine); playbackLine = null; }
+    if (playbackPlayed) { map.removeLayer(playbackPlayed); playbackPlayed = null; }
+    ensureTrail();
+    await loadHistory();
+  }
+  async function enterPlayback() {
+    mode = 'play';
+    $('liveControls').style.display = 'none';
+    $('playerPanel').style.display = 'grid';
+    $('modeLive').classList.remove('active'); $('modePlay').classList.add('active');
+    $('modeLive2').classList.remove('active'); $('modePlay2').classList.add('active');
+    $('modeTitle').textContent = '车辆位置 · 回看';
+    setConn('play');
+    if (trailLine) { map.removeLayer(trailLine); trailLine = null; }
+    trailPoints = [];
+    // Default the time pickers to the last hour in Beijing time.
+    if (!$('startTime').value || !$('endTime').value) {
+      defaultPlaybackRange();
+    }
+    await loadRange();
+  }
+
+  // ---------- Time-range picker ----------
+  // datetime-local input gives us "YYYY-MM-DDTHH:MM[:SS]" with no timezone.
+  // We treat it as Beijing time (UTC+8) and convert to a UTC ISO string
+  // before sending to the server, which stores everything in UTC.
+  function beijingToUtcInput(localDt) {
+    if (!localDt) return null;
+    return new Date(localDt + '+08:00').toISOString();
+  }
+  function utcIsoToBeijingInput(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    if (isNaN(d)) return '';
+    const shifted = new Date(d.getTime() + 8 * 3600 * 1000);
+    const p = (n) => String(n).padStart(2, '0');
+    return `${shifted.getUTCFullYear()}-${p(shifted.getUTCMonth() + 1)}-${p(shifted.getUTCDate())}` +
+           `T${p(shifted.getUTCHours())}:${p(shifted.getUTCMinutes())}:${p(shifted.getUTCSeconds())}`;
+  }
+  function defaultPlaybackRange() {
+    const now = new Date();
+    const oneHourAgo = new Date(now.getTime() - 3600 * 1000);
+    $('endTime').value   = utcIsoToBeijingInput(now.toISOString());
+    $('startTime').value = utcIsoToBeijingInput(oneHourAgo.toISOString());
+  }
+
+  // ---------- Load & play a range ----------
+  async function loadRange() {
+    const playBtn = $('playBtn');
+    playBtn.disabled = true;
+    playBtn.textContent = '载入…';
+
+    const startLocal = $('startTime').value;
+    const endLocal   = $('endTime').value;
+    if (!startLocal || !endLocal) {
+      console.warn('playback: missing start/end time');
+      playBtn.textContent = '▶';
+      playBtn.disabled = false;
+      return;
+    }
+    const startUtc = beijingToUtcInput(startLocal);
+    const endUtc   = beijingToUtcInput(endLocal);
+
+    try {
+      const r = await fetch(`/api/history?start=${encodeURIComponent(startUtc)}&end=${encodeURIComponent(endUtc)}&max_points=8000`);
+      const data = await r.json();
+      stopPlayback(true);
+      const rows = data.rows;   // ascending by ts (oldest first)
+      state.play.rows = rows;
+      state.play.idx = 0;
+
+      ensurePlaybackLayers();
+      const coords = rows.map(r => [r.lat, r.lon]);
+      playbackLine.setLatLngs(coords);
+      playbackPlayed.setLatLngs(coords.length ? [coords[0]] : []);
+
+      if (rows.length) {
+        $('tNow').textContent = fmtTime(rows[0].ts);
+        $('tDur').textContent  = fmtTime(rows[rows.length - 1].ts);
+        const seek = $('seek');
+        seek.min = 0; seek.max = rows.length - 1; seek.value = 0;
+        ensureMarker(rows[0].lat, rows[0].lon);
+        map.fitBounds(playbackLine.getBounds(), { padding: [60, 60], maxZoom: 17 });
+        applyPlaybackFrame(0);
+      } else {
+        $('tNow').textContent = '—';
+        $('tDur').textContent = '该时段无数据';
+        const seek = $('seek');
+        seek.min = 0; seek.max = 0; seek.value = 0;
+      }
+      $('ll').textContent = rows.length ? '' : '— —';
+      playBtn.disabled = false;
+      playBtn.textContent = '▶';
+    } catch (e) {
+      console.error('loadRange failed', e);
+      playBtn.textContent = '▶';
+      playBtn.disabled = false;
+    }
+  }
+
+  function applyPlaybackFrame(i) {
+    try {
+      const rows = state.play.rows;
+      if (!rows.length || i < 0 || i >= rows.length) return;
+      const r = rows[i];
+      state.play.idx = i;
+
+      ensureMarker(r.lat, r.lon);
+      if (r.cog_deg != null) {
+        const el = document.getElementById('markerArrow');
+        if (el) el.style.transform = `rotate(${r.cog_deg}deg)`;
+      }
+      $('ll').textContent = `${fmt(r.lat, 6)}, ${fmt(r.lon, 6)}`;
+      $('ll').style.color = 'var(--accent)';
+      $('sog').textContent  = fmt(r.sog_kmh, 1);
+      $('cog').textContent  = fmtCog(r.cog_deg);
+      $('alt').textContent  = fmt(r.alt, 0);
+      $('sat').textContent  = `${fmtInt(r.sat_used)}/${fmtInt('—')}`;
+      $('hdop').textContent = fmt(r.hdop, 1);
+      $('cn0').textContent  = fmtInt(r.cn0_max);
+      $('utc').textContent  = fmtTime(r.ts);
+      $('hpa').textContent  = '—';
+
+      $('tNow').textContent = fmtTime(r.ts);
+      const seek = $('seek');
+      // Force the slider to redraw by setting value twice; some browsers
+      // skip the visual update when value changes by a small integer step
+      // and no input event is dispatched.
+      seek.value = i;
+      seek.setAttribute('value', String(i));
+
+      // Update played segment.
+      if (playbackPlayed) {
+        const coords = state.play.rows.map(x => [x.lat, x.lon]);
+        playbackPlayed.setLatLngs(coords.slice(0, i + 1));
+      }
+
+      if (state.follow) {
+        map.panTo([r.lat, r.lon], { animate: true, duration: 0.4 });
+      }
+    } catch (e) {
+      console.error('applyPlaybackFrame failed at i=' + i, e);
+      stopPlayback(false);
+    }
+  }
+
+  function stopPlayback(resetIdx) {
+    state.play.playing = false;
+    if (state.play.timer) clearInterval(state.play.timer);
+    state.play.timer = null;
+    $('playBtn').textContent = '▶';
+    $('playBtn').disabled = false;
+    if (resetIdx) state.play.idx = 0;
+    setConn('play');
+  }
+  function startPlayback() {
+    if (state.play.rows.length < 2) {
+      console.warn('playback: no data loaded yet (rows.length=' +
+                  state.play.rows.length + ')');
+      flashPlayBtn('载入中…');
+      return;
+    }
+    state.play.playing = true;
+    $('playBtn').textContent = '⏸';
+    setConn('play');
+
+    let last = performance.now();
+    state.play.timer = setInterval(() => {
+      if (!state.play.playing) return;
+      const now = performance.now();
+      const dt = (now - last) / 1000;
+      last = now;
+      // Advance frames: at 1× speed, 1 second = 1 row.
+      const advance = dt * state.play.speed;
+      let i = state.play.idx + advance;
+      if (i >= state.play.rows.length - 1) {
+        i = state.play.rows.length - 1;
+        applyPlaybackFrame(i);
+        stopPlayback(false);
+        return;
+      }
+      applyPlaybackFrame(Math.floor(i));
+    }, 50);  // 20 Hz
+  }
+  function flashPlayBtn(text) {
+    const btn = $('playBtn');
+    const orig = btn.textContent;
+    btn.textContent = text;
+    btn.disabled = true;
+    setTimeout(() => {
+      btn.textContent = orig;
+      btn.disabled = false;
+    }, 700);
+  }
+
+  // ---------- Wire controls ----------
+  $('followBtn').onclick = (e) => {
+    state.follow = !state.follow;
+    e.currentTarget.classList.toggle('active', state.follow);
+  };
+  $('locateBtn').onclick = () => {
+    if (mode !== 'live') return;
+    if (!state.lastFix || state.lastFix.fix !== 1
+        || state.lastFix.lat == null) {
+      const btn = $('locateBtn');
+      btn.classList.remove('flash');
+      void btn.offsetWidth;            // restart animation
+      btn.classList.add('flash');
+      setTimeout(() => btn.classList.remove('flash'), 700);
+      return;
+    }
+    const pos = [state.lastFix.lat, state.lastFix.lon];
+    // Don't down-zoom if the user already zoomed in.
+    const z = Math.max(map.getZoom(), 16);
+    map.setView(pos, z, { animate: true, duration: 0.6 });
+    // Re-enable follow so subsequent 1Hz fixes keep us centred.
+    state.follow = true;
+    $('followBtn').classList.add('active');
+  };
+  $('trailBtn').onclick = (e) => {
+    state.showTrail = !state.showTrail;
+    e.currentTarget.classList.toggle('active', state.showTrail);
+    if (state.showTrail) { ensureTrail(); trailLine.setLatLngs(trailPoints); }
+    else if (trailLine) { map.removeLayer(trailLine); trailLine = null; }
+  };
+
+  $('modeLive').onclick = enterLive;
+  $('modePlay').onclick = enterPlayback;
+  $('modeLive2').onclick = enterLive;
+  $('modePlay2').onclick = enterPlayback;
+
+  $('loadRangeBtn').onclick = loadRange;
+  $('speedSel').onchange = (e) => { state.play.speed = parseFloat(e.target.value); };
+  $('seek').oninput = (e) => {
+    if (!state.play.rows.length) return;
+    applyPlaybackFrame(parseInt(e.target.value, 10));
+  };
+  $('playBtn').onclick = () => {
+    if (state.play.playing) stopPlayback(false);
+    else {
+      // If at end, restart from beginning.
+      if (state.play.idx >= state.play.rows.length - 1) {
+        applyPlaybackFrame(0);
+      }
+      startPlayback();
+    }
+  };
+  $('closeBtn').onclick = enterLive;
+
+  // Initial: live mode
+  loadHistory();
+  connect();
+
+  // Live freshness indicator.
+  setInterval(() => {
+    if (mode !== 'live' || !state.lastFix) return;
+    const age = (Date.now() - new Date(state.lastFix.ts).getTime()) / 1000;
+    if (age > 5) setConn('stale');
+  }, 2000);
+
+  // ---------- Sidebar nav + Page switching ----------
+  // Chart.js is loaded via <script src="/static/vendor/chart.umd.min.js">.
+  // We rely on the global `Chart`; if it's missing we just skip rendering.
+  const hasChart = typeof Chart !== 'undefined';
+
+  // Hoisted flag — declared BEFORE any function that references it so we
+  // don't hit the temporal dead zone when restoring the last-active page
+  // below.
+  let dashboardLoaded = false;
+
+  // Restore sidebar expand/collapse state from localStorage.
+  if (localStorage.getItem('cm.sidebar') === 'expanded') {
+    document.body.classList.add('expanded');
+  }
+
+  // Toggle ≡ button. After the CSS transition settles, ask Leaflet to
+  // recompute its size (the map container grew/shrank) so tiles don't
+  // get stuck half-rendered.
+  $('sbToggle').onclick = () => {
+    const expanded = document.body.classList.toggle('expanded');
+    localStorage.setItem('cm.sidebar', expanded ? 'expanded' : 'collapsed');
+    setTimeout(() => map.invalidateSize(), 260);
+  };
+
+  // Brand button: jump back to the dashboard page from anywhere.
+  $('sbBrand').onclick = () => switchPage('dashboard');
+
+  // Page switching: clicking a nav button toggles which <section.page> is
+  // visible. Charts inside the dashboard need an explicit resize() call
+  // every time the page becomes visible (Chart.js measures canvas size
+  // on construction; if it built while hidden, sizes are wrong).
+  let currentPage = 'map';
+  function switchPage(name) {
+    if (name === currentPage) return;
+    document.querySelectorAll('.page').forEach(p =>
+      p.classList.toggle('active', p.classList.contains('page-' + name)));
+    document.querySelectorAll('.nav-btn').forEach(b =>
+      b.classList.toggle('active', b.dataset.page === name));
+    currentPage = name;
+    localStorage.setItem('cm.page', name);
+    if (name === 'map') {
+      // Leaflet needs to know its new size after we flip display back on.
+      setTimeout(() => map.invalidateSize(), 30);
+    } else if (name === 'dashboard') {
+      // Lazy-load on first visit; afterwards just resize existing charts
+      // so they fill the now-visible canvas.
+      if (!dashboardLoaded) loadDashboard();
+      setTimeout(resizeDashboardCharts, 30);
+    }
+  }
+  document.querySelectorAll('.nav-btn').forEach(btn => {
+    btn.onclick = () => switchPage(btn.dataset.page);
+  });
+  // Refresh button on the dashboard page.
+  $('dashRefresh').onclick = () => loadDashboard(true);
+
+  // Restore last-active page.
+  const savedPage = localStorage.getItem('cm.page');
+  if (savedPage && savedPage !== 'map') {
+    switchPage(savedPage);
+  }
+
+  // Chart.js global defaults tuned for our dark theme.
+  if (hasChart) {
+    Chart.defaults.color = '#8b97a4';
+    Chart.defaults.borderColor = 'rgba(255,255,255,0.08)';
+    Chart.defaults.font.family = "'SF Mono','JetBrains Mono',Menlo,Consolas,monospace";
+    Chart.defaults.font.size = 11;
+    Chart.defaults.plugins.legend.display = false;
+    Chart.defaults.plugins.tooltip.backgroundColor = 'rgba(15,22,28,0.95)';
+    Chart.defaults.plugins.tooltip.borderColor = 'rgba(255,255,255,0.15)';
+    Chart.defaults.plugins.tooltip.borderWidth = 1;
+    Chart.defaults.plugins.tooltip.padding = 8;
+  }
+
+  let cDaily = null, cHist = null, cSignal = null;
+  let cHeatBuilt = false;
+
+  async function loadDashboard(forceReload) {
+    if (!forceReload && dashboardLoaded) return;
+    try {
+      const r = await fetch('/api/dashboard?days=30');
+      if (!r.ok) throw new Error('http ' + r.status);
+      const d = await r.json();
+      renderDashboard(d);
+      dashboardLoaded = true;
+    } catch (e) {
+      console.error('dashboard load failed', e);
+      const grid = document.querySelector('#pageDashboard .dash-grid');
+      if (grid) grid.innerHTML =
+        '<div class="dash-empty">仪表盘加载失败：' + (e.message || e) + '</div>';
+    }
+  }
+
+  function resizeDashboardCharts() {
+    // Chart.js measures canvas clientWidth at construction time. If the
+    // dashboard was built while display:none, sizes are zero — we have
+    // to call .resize() once the page becomes visible.
+    if (cDaily)  cDaily.resize();
+    if (cHist)   cHist.resize();
+    if (cSignal) cSignal.resize();
+  }
+
+  function fmtKm(v) {
+    if (v == null) return '—';
+    return v < 10 ? v.toFixed(2) : v.toFixed(1);
+  }
+  function fmtKmh(v) {
+    if (v == null) return '—';
+    return v.toFixed(1);
+  }
+  function fmtDur(s) {
+    if (!s) return '—';
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = s % 60;
+    if (h) return `${h}h${m}m`;
+    if (m) return `${m}m${sec}s`;
+    return `${sec}s`;
+  }
+
+  function renderDashboard(d) {
+    // ---- KPI cards ----
+    const k = d.kpis || {};
+    $('kTotal').textContent = fmtKm(k.total_distance_km);
+    $('kMax').textContent   = fmtKmh(k.max_speed_kmh);
+    $('kAvg').textContent   = fmtKmh(k.avg_speed_kmh);
+    $('kTrips').textContent = k.trip_count != null ? k.trip_count : '—';
+    $('kpiRange').textContent =
+      (d.daily_distance && d.daily_distance.length)
+        ? `${d.daily_distance.length} 天`
+        : '';
+
+    // ---- Daily distance bar chart ----
+    if (hasChart) {
+      const labels = (d.daily_distance || []).map(x => x.date.slice(5));
+      const data   = (d.daily_distance || []).map(x => x.km);
+      const ctx = $('cDaily').getContext('2d');
+      if (cDaily) cDaily.destroy();
+      cDaily = new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels,
+          datasets: [{
+            data,
+            backgroundColor: 'rgba(79,195,247,0.6)',
+            borderColor: 'rgba(79,195,247,0.9)',
+            borderWidth: 1,
+            borderRadius: 3,
+          }],
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          scales: {
+            x: { ticks: { maxRotation: 0, autoSkip: true, maxTicksLimit: 8 },
+                 grid: { display: false } },
+            y: { beginAtZero: true,
+                 grid: { color: 'rgba(255,255,255,0.05)' },
+                 ticks: { callback: (v) => v + ' km' } },
+          },
+        },
+      });
+
+      // ---- Speed histogram ----
+      // Y-axis shows share of total sample-time spent in each speed bin
+      // (1Hz cadence means count == seconds). Raw counts and hours are
+      // kept in the dataset so the tooltip can show both for context.
+      const hist = d.speed_histogram || [];
+      const hLabels = hist.map(b => `${b.lo}–${b.hi}`);
+      const hCounts = hist.map(b => b.count);
+      const hTotal  = hCounts.reduce((a, b) => a + b, 0) || 1;
+      const hPct    = hCounts.map(c => +(c * 100 / hTotal).toFixed(2));
+      const hctx = $('cHist').getContext('2d');
+      if (cHist) cHist.destroy();
+      cHist = new Chart(hctx, {
+        type: 'bar',
+        data: {
+          labels: hLabels,
+          datasets: [{
+            label: '占比',
+            data: hPct,
+            backgroundColor: 'rgba(102,187,106,0.55)',
+            borderColor: 'rgba(102,187,106,0.9)',
+            borderWidth: 1, borderRadius: 3,
+            // Custom payload so the tooltip callback can read the raw count.
+            counts: hCounts,
+            hours:  hCounts.map(c => +(c / 3600).toFixed(2)),
+          }],
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          plugins: {
+            tooltip: {
+              callbacks: {
+                title: (items) => `${items[0].label} km/h`,
+                label: (ctx) => {
+                  const ds = ctx.dataset;
+                  const pct  = ctx.parsed.y;
+                  const cnt  = ds.counts[ctx.dataIndex];
+                  const hrs  = ds.hours[ctx.dataIndex];
+                  return [
+                    `占比 ${pct.toFixed(1)}%`,
+                    `采样 ${cnt.toLocaleString()} 次 · ${hrs} 小时`,
+                  ];
+                },
+              },
+            },
+          },
+          scales: {
+            x: {
+              title: { display: true, text: '速度 (km/h)', font: { size: 10 } },
+              ticks: { maxRotation: 60, autoSkip: false, font: { size: 9 } },
+              grid: { display: false },
+            },
+            y: {
+              beginAtZero: true,
+              title: { display: true, text: '占比 (%)', font: { size: 10 } },
+              grid: { color: 'rgba(255,255,255,0.05)' },
+              ticks: { callback: (v) => v + '%' },
+            },
+          },
+        },
+      });
+
+      // ---- Signal quality (dual axis: HDOP left, sat_used right) ----
+      const sq = d.signal_quality || [];
+      const sLabels = sq.map(x => x.date.slice(5));
+      const hdop    = sq.map(x => x.hdop);
+      const sat     = sq.map(x => x.sat_used);
+      const sctx = $('cSignal').getContext('2d');
+      if (cSignal) cSignal.destroy();
+      cSignal = new Chart(sctx, {
+        data: {
+          labels: sLabels,
+          datasets: [
+            {
+              type: 'line', label: 'HDOP',
+              data: hdop, yAxisID: 'y1',
+              borderColor: 'rgba(255,183,77,0.9)',
+              backgroundColor: 'rgba(255,183,77,0.15)',
+              tension: 0.3, fill: true,
+              pointRadius: 2, borderWidth: 1.5,
+            },
+            {
+              type: 'line', label: 'sat',
+              data: sat, yAxisID: 'y2',
+              borderColor: 'rgba(79,195,247,0.9)',
+              backgroundColor: 'rgba(79,195,247,0.15)',
+              tension: 0.3, fill: false,
+              pointRadius: 2, borderWidth: 1.5,
+            },
+          ],
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { display: true, position: 'top',
+                               labels: { boxWidth: 8, font: { size: 10 } } } },
+          scales: {
+            x: { grid: { display: false } },
+            y1: { position: 'left', beginAtZero: true,
+                  grid: { color: 'rgba(255,255,255,0.05)' },
+                  title: { display: true, text: 'HDOP', font: { size: 9 } } },
+            y2: { position: 'right', beginAtZero: true,
+                  grid: { display: false },
+                  title: { display: true, text: 'sat', font: { size: 9 } } },
+          },
+        },
+      });
+    }
+
+    // ---- Heatmap (Mon..Sun × 0..23) ----
+    const heat = d.hourly_heatmap || [];
+    if (!cHeatBuilt) {
+      const wdLabels = ['一', '二', '三', '四', '五', '六', '日'];
+      const root = $('cHeat');
+      root.innerHTML = '';
+      // Header row: blank corner + 24 hour labels (0, 6, 12, 18 only)
+      root.appendChild(div('corner'));
+      for (let h = 0; h < 24; h++) {
+        const label = (h === 0 || h === 6 || h === 12 || h === 18) ? `${h}` : '';
+        const el = div(`haxis h${h}`); el.textContent = label;
+        root.appendChild(el);
+      }
+      // 7 data rows
+      for (let r = 0; r < 7; r++) {
+        const lab = div('vaxis'); lab.textContent = wdLabels[r];
+        root.appendChild(lab);
+        for (let h = 0; h < 24; h++) {
+          const v = heat[r] && heat[r][h] ? heat[r][h] : 0;
+          const cell = div('cell');
+          cell.dataset.v = v.toFixed(2);
+          cell.title = `${wdLabels[r]} ${h}:00 — ${v.toFixed(2)} km`;
+          // Map 0..max to opacity 0..1 on accent color.
+          cell.style.background = heatColor(v);
+          root.appendChild(cell);
+        }
+      }
+      cHeatBuilt = true;
+    } else {
+      // Re-render only the data cells.
+      const cells = $('cHeat').querySelectorAll('.cell');
+      let i = 0;
+      let max = 0;
+      for (let r = 0; r < 7; r++) {
+        for (let h = 0; h < 24; h++) {
+          const v = heat[r] && heat[r][h] ? heat[r][h] : 0;
+          if (v > max) max = v;
+          cells[i].dataset.v = v.toFixed(2);
+          i++;
+        }
+      }
+      i = 0;
+      for (let r = 0; r < 7; r++) {
+        for (let h = 0; h < 24; h++) {
+          const v = heat[r] && heat[r][h] ? heat[r][h] : 0;
+          cells[i].style.background = heatColor(v, max);
+          i++;
+        }
+      }
+    }
+
+    // ---- Top 5 trips table ----
+    const tbody = $('cTrips').querySelector('tbody');
+    tbody.innerHTML = '';
+    const trips = d.top_trips || [];
+    if (!trips.length) {
+      tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:var(--muted)">暂无行程</td></tr>';
+    } else {
+      for (const t of trips) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>${t.date}</td>
+          <td class="lkm">${fmtKm(t.distance_km)}</td>
+          <td>${fmtDur(t.duration_s)}</td>
+          <td>${fmtKmh(t.max_speed_kmh)}</td>`;
+        tbody.appendChild(tr);
+      }
+    }
+  }
+
+  function div(cls) {
+    const el = document.createElement('div');
+    el.className = cls;
+    return el;
+  }
+
+  function heatColor(v, max) {
+    if (!v) return 'rgba(255,255,255,0.03)';
+    if (max === undefined || max <= 0) {
+      // First render before we know the max — use a fixed scale of 0..5 km
+      // which covers most cells; will be re-rendered on next load.
+      const ratio = Math.min(1, v / 5);
+      return `rgba(79,195,247,${0.18 + 0.7 * ratio})`;
+    }
+    const ratio = Math.min(1, v / max);
+    return `rgba(79,195,247,${0.15 + 0.75 * ratio})`;
+  }
+
+  // Defer dashboard load until the dashboard page is first shown —
+  // Chart.js measures canvas width at construction time, and if we built
+  // the charts while .page-dashboard was display:none they'd render at 0px.
+  // If the user restored to dashboard via localStorage, fetch now (after
+  // the page is visible). Otherwise we'll fetch on the first switch.
+  if (currentPage === 'dashboard') loadDashboard();
+
+  // ---------- Data management page ----------
+  let dataDays = [];     // cached list of {date, count, distance_km, ...}
+  let dataLoaded = false;
+
+  function fmtUtcToBeijing(iso) {
+    if (!iso) return '—';
+    const d = new Date(iso);
+    if (isNaN(d)) return iso;
+    const p = (n) => String(n).padStart(2, '0');
+    const shifted = new Date(d.getTime() + 8 * 3600 * 1000);
+    return `${shifted.getUTCFullYear()}-${p(shifted.getUTCMonth()+1)}-${p(shifted.getUTCDate())} ` +
+           `${p(shifted.getUTCHours())}:${p(shifted.getUTCMinutes())}`;
+  }
+  function beijingInputToUtc(localDt) {
+    if (!localDt) return null;
+    return new Date(localDt + '+08:00').toISOString();
+  }
+  function fmtTimeShort(iso) {
+    if (!iso) return '—';
+    const d = new Date(iso);
+    if (isNaN(d)) return iso;
+    const p = (n) => String(n).padStart(2, '0');
+    const shifted = new Date(d.getTime() + 8 * 3600 * 1000);
+    return `${p(shifted.getUTCMonth()+1)}-${p(shifted.getUTCDate())} ` +
+           `${p(shifted.getUTCHours())}:${p(shifted.getUTCMinutes())}`;
+  }
+
+  async function loadDataPage(force) {
+    if (dataLoaded && !force) return;
+    try {
+      const r = await fetch('/api/data/days');
+      if (!r.ok) throw new Error('http ' + r.status);
+      const data = await r.json();
+      dataDays = data.days || [];
+      dataLoaded = true;
+      renderDataPage();
+    } catch (e) {
+      console.error('loadDataPage failed', e);
+    }
+  }
+
+  function renderDataPage() {
+    // ---- Summary KPIs ----
+    const totalCount = dataDays.reduce((a, d) => a + d.count, 0);
+    $('dTotalCount').textContent = totalCount.toLocaleString();
+    $('dDayCount').textContent   = dataDays.length;
+    $('dEarliest').textContent   = fmtUtcToBeijing(dataDays[0]?.first);
+    $('dLatest').textContent     = fmtUtcToBeijing(dataDays[dataDays.length-1]?.last);
+    $('dataStats').textContent   = dataDays.length
+      ? `${dataDays.length} 天 · ${totalCount.toLocaleString()} 条记录`
+      : '';
+
+    // ---- Days table with checkboxes ----
+    const tbody = $('dDaysTable').querySelector('tbody');
+    tbody.innerHTML = '';
+    for (const d of dataDays) {
+      const tr = document.createElement('tr');
+      tr.dataset.date = d.date;
+      tr.innerHTML = `
+        <td><input type="checkbox" class="dday-cb" data-date="${d.date}"></td>
+        <td>${d.date}</td>
+        <td>${d.count.toLocaleString()}</td>
+        <td class="lkm">${d.distance_km.toFixed(2)}</td>
+        <td>${d.max_speed_kmh.toFixed(1)}</td>
+        <td>${fmtTimeShort(d.first)} – ${fmtTimeShort(d.last)}</td>`;
+      tbody.appendChild(tr);
+    }
+    // Wire up: row click toggles checkbox; checkbox toggles row highlight.
+    tbody.querySelectorAll('input.dday-cb').forEach(cb => {
+      cb.onchange = () => {
+        cb.closest('tr').classList.toggle('selected', cb.checked);
+        updateDelSelBtn();
+      };
+    });
+    tbody.querySelectorAll('tr').forEach(tr => {
+      tr.onclick = (e) => {
+        if (e.target.tagName === 'INPUT') return;
+        const cb = tr.querySelector('input.dday-cb');
+        cb.checked = !cb.checked;
+        cb.dispatchEvent(new Event('change'));
+      };
+    });
+    updateDelSelBtn();
+
+    // Default the range picker to the most recent day.
+    if (dataDays.length) {
+      const last = dataDays[dataDays.length - 1];
+      $('dRangeStart').value = utcIsoToBeijingInput(last.first);
+      $('dRangeEnd').value   = utcIsoToBeijingInput(last.last);
+    }
+  }
+
+  function updateDelSelBtn() {
+    const n = document.querySelectorAll('#dDaysTable input.dday-cb:checked').length;
+    const btn = $('dDelSel');
+    btn.disabled = n === 0;
+    btn.textContent = `删除选中 (${n})`;
+  }
+
+  $('dSelAll').onclick = () => {
+    document.querySelectorAll('#dDaysTable input.dday-cb').forEach(cb => {
+      cb.checked = true;
+      cb.closest('tr').classList.add('selected');
+    });
+    updateDelSelBtn();
+  };
+  $('dSelNone').onclick = () => {
+    document.querySelectorAll('#dDaysTable input.dday-cb').forEach(cb => {
+      cb.checked = false;
+      cb.closest('tr').classList.remove('selected');
+    });
+    updateDelSelBtn();
+  };
+  $('dSelInvert').onclick = () => {
+    document.querySelectorAll('#dDaysTable input.dday-cb').forEach(cb => {
+      cb.checked = !cb.checked;
+      cb.closest('tr').classList.toggle('selected', cb.checked);
+    });
+    updateDelSelBtn();
+  };
+
+  async function postDelete(body, confirmMsg) {
+    if (!confirm(confirmMsg)) return;
+    try {
+      const r = await fetch('/api/data/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const out = await r.json();
+      if (!r.ok) throw new Error(out.error || 'http ' + r.status);
+      alert(`已删除 ${out.deleted.toLocaleString()} 条记录`);
+      // Refresh dependent pages.
+      dataLoaded = false;
+      dashboardLoaded = false;
+      await loadDataPage(true);
+      // If we were on dashboard, force a reload next time it's shown.
+    } catch (e) {
+      alert('删除失败：' + (e.message || e));
+    }
+  }
+
+  $('dDelSel').onclick = () => {
+    const dates = [...document.querySelectorAll('#dDaysTable input.dday-cb:checked')]
+      .map(cb => cb.dataset.date);
+    if (!dates.length) return;
+    const total = dates.reduce((a, d) => {
+      const r = dataDays.find(x => x.date === d);
+      return a + (r ? r.count : 0);
+    }, 0);
+    postDelete({ days: dates },
+      `确定要删除 ${dates.length} 个日期（${total.toLocaleString()} 条记录）？此操作不可撤销。`);
+  };
+
+  $('dDelRange').onclick = () => {
+    const s = $('dRangeStart').value;
+    const e = $('dRangeEnd').value;
+    if (!s || !e) { alert('请输入起始和截止时间'); return; }
+    const startUtc = beijingInputToUtc(s);
+    const endUtc   = beijingInputToUtc(e);
+    postDelete({ start: startUtc, end: endUtc },
+      `确定要删除 ${s} 至 ${e}（北京时间）之间的所有记录？此操作不可撤销。`);
+  };
+
+  $('dDelAll').onclick = () => {
+    postDelete({ all: true },
+      '⚠ 即将清空数据库中的所有 GPS 记录。此操作不可撤销，确定继续吗？');
+  };
+
+  $('dataRefresh').onclick = () => loadDataPage(true);
+
+  // Load data page when first switched to it.
+  const _origSwitchPage = switchPage;
+  switchPage = function(name) {
+    _origSwitchPage(name);
+    if (name === 'data') loadDataPage(false);
+  };
+  </script>
+</body>
+</html>

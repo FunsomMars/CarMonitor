@@ -1,0 +1,17 @@
+# SIM7000C (and other SIMCom modules with VID/PID 1e0e:9001) interface
+# symlinks. The interface numbers are stable in the USB descriptor; only
+# the resulting /dev/ttyUSB* names depend on enumeration order, so we
+# attach a friendly alias that always points at the right port.
+#
+#   /dev/sim7000c-at      AT command port        (interface 02)
+#   /dev/sim7000c-nmea    NMEA GPS stream        (interface 01)
+#   /dev/sim7000c-ppp     Modem / RmNet / PPP    (interface 03)
+#
+# Drop this file in /etc/udev/rules.d/ on the Pi, then:
+#   sudo udevadm control --reload-rules
+#   sudo udevadm trigger
+# Re-plugging the module picks up the new symlinks immediately.
+
+SUBSYSTEM=="tty", ENV{ID_VENDOR_ID}=="1e0e", ENV{ID_MODEL_ID}=="9001", ENV{ID_USB_INTERFACE_NUM}=="02", SYMLINK+="sim7000c-at"
+SUBSYSTEM=="tty", ENV{ID_VENDOR_ID}=="1e0e", ENV{ID_MODEL_ID}=="9001", ENV{ID_USB_INTERFACE_NUM}=="01", SYMLINK+="sim7000c-nmea"
+SUBSYSTEM=="tty", ENV{ID_VENDOR_ID}=="1e0e", ENV{ID_MODEL_ID}=="9001", ENV{ID_USB_INTERFACE_NUM}=="03", SYMLINK+="sim7000c-ppp"
