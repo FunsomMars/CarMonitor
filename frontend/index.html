@@ -337,6 +337,8 @@
     display: grid;
     grid-template-columns: repeat(4, 1fr);
     gap: 14px;
+    /* Match the .dash-header inset so the cards line up with the H1. */
+    margin: 0 20px;
   }
   .dash-grid .widget.kpi-card { grid-column: span 1; }
   .dash-grid .widget.col-2    { grid-column: span 2; }
@@ -420,11 +422,12 @@
   }
 
   /* ----- Data management page ----- */
-  .page-data .data-summary { margin-bottom: 14px; }
-  /* Spacing between the danger-row grid and the by-date widget below it
-     (and as a uniform top margin for any standalone widget under the KPIs). */
-  .page-data .dash-grid { margin-bottom: 14px; }
-  .page-data > .widget { margin-top: 14px; }
+  /* Horizontal inset: KPI summary, the danger-row grid, and the standalone
+     by-date widget should not touch the page edges — keep them 20px in on
+     both sides so they line up with the inset .dash-header above. */
+  .page-data .data-summary { margin: 0 20px 14px 20px; }
+  .page-data .dash-grid { margin: 0 20px 14px 20px; }
+  .page-data > .widget { margin: 14px 20px 0 20px; }
   .page-data .data-toolbar {
     display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap;
     align-items: center;
