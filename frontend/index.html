@@ -1244,6 +1244,7 @@
   // don't hit the temporal dead zone when restoring the last-active page
   // below.
   let dashboardLoaded = false;
+  let dataLoaded = false;
 
   // Restore sidebar expand/collapse state from localStorage.
   if (localStorage.getItem('cm.sidebar') === 'expanded') {
@@ -1303,8 +1304,12 @@
       if (!dashboardLoaded) loadDashboard();
       setTimeout(resizeDashboardCharts, 30);
       startDashboardAutoRefresh();
+    } else if (name === 'data') {
+      // Lazy-load the data page on first visit. Subsequent visits use the
+      // cached dataDays (the refresh button forces a reload with `true`).
+      if (!dataLoaded) loadDataPage();
     } else {
-      // data page (or any future page) — stop the timer.
+      // any other future page — stop the dashboard timer.
       stopDashboardAutoRefresh();
     }
   }
@@ -1628,7 +1633,6 @@
 
   // ---------- Data management page ----------
   let dataDays = [];     // cached list of {date, count, distance_km, ...}
-  let dataLoaded = false;
 
   function fmtUtcToBeijing(iso) {
     if (!iso) return '—';
@@ -1796,13 +1800,6 @@
   };
 
   $('dataRefresh').onclick = () => loadDataPage(true);
-
-  // Load data page when first switched to it.
-  const _origSwitchPage = switchPage;
-  switchPage = function(name) {
-    _origSwitchPage(name);
-    if (name === 'data') loadDataPage(false);
-  };
   </script>
 </body>
 </html>
