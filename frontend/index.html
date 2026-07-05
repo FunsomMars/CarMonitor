@@ -294,7 +294,9 @@
   .page-data .dash-header {
     display: flex; align-items: center; justify-content: space-between;
     margin: 0 0 18px 0;
-    padding: 4px 24px 0 24px;
+    /* Equal top / left / right inset: h1 sits X from top and X from left,
+       refresh button sits X from top and X from right — symmetric. */
+    padding: 20px 20px 0 20px;
   }
   .page-dashboard .dash-header h1,
   .page-data .dash-header h1 {
